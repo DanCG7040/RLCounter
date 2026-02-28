@@ -1,20 +1,15 @@
 @echo off
-cd /d "%~dp0"
 setlocal enabledelayedexpansion
+cd /d "%~dp0"
 
-REM Uso:
-REM - Doble clic: te pide la ruta del .replay
-REM - Arrastrar y soltar: usa el archivo soltado como %1
+REM Un solo acceso directo: doble clic -> selector de archivo -> genera el JSON
 
-set "REPLAY=%~1"
-if "%REPLAY%"=="" (
-  echo.
-  echo Escribe o pega la ruta completa del archivo .replay y pulsa Enter:
-  set /p "REPLAY=> "
+for /f "usebackq delims=" %%F in (`powershell -NoProfile -Command "Add-Type -AssemblyName System.Windows.Forms; $dlg = New-Object System.Windows.Forms.OpenFileDialog; $dlg.Filter = 'Replays (*.replay)|*.replay|Todos los archivos (*.*)|*.*'; $dlg.Title = 'Selecciona un replay de Rocket League'; $dlg.InitialDirectory = (Get-Location).Path; if ($dlg.ShowDialog() -eq 'OK') { Write-Output $dlg.FileName }"`) do (
+  set "REPLAY=%%F"
 )
 
 if "%REPLAY%"=="" (
-  echo No se especifico ningun replay.
+  echo No se selecciono ningun archivo.
   pause
   exit /b 1
 )
@@ -25,10 +20,8 @@ if not exist "%REPLAY%" (
   exit /b 1
 )
 
-REM Salida: mismo nombre que el replay, con extension .json
 for %%F in ("%REPLAY%") do set "OUT=%%~dpnF.json"
 
-REM Preferir venv si existe, si no usar py -3.11
 set "PY="
 if exist "%~dp0.venv\Scripts\python.exe" set "PY=%~dp0.venv\Scripts\python.exe"
 

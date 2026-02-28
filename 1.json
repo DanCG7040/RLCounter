@@ -5,28 +5,35 @@
   },
   "goals": [
     {
-      "time": "04:42",
+      "time": "03:15",
+      "team": "Visitante"
+    },
+    {
+      "time": "02:29",
       "team": "Local"
     },
     {
-      "time": "04:30",
+      "time": "01:37",
       "team": "Local"
     },
     {
-      "time": "04:07",
-      "team": "Visitante"
-    },
-   
-    {
-      "time": "03:48",
+      "time": "01:16",
       "team": "Visitante"
     },
     {
-      "time": "03:14",
+      "time": "01:03",
+      "team": "Local"
+    },
+    {
+      "time": "00:52",
+      "team": "Local"
+    },
+    {
+      "time": "00:35",
       "team": "Visitante"
     },
     {
-      "time": "01:14",
+      "time": "00:16",
       "team": "Visitante"
     }
   ]

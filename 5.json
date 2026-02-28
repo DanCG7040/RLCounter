@@ -1,0 +1,52 @@
+{
+  "teams": {
+    "blue": "Local",
+    "orange": "Visitante"
+  },
+  "goals": [
+    {
+      "time": "03:43",
+      "team": "Visitante"
+    },
+    {
+      "time": "03:13",
+      "team": "Local"
+    },
+    {
+      "time": "02:04",
+      "team": "Local"
+    },
+    {
+      "time": "01:59",
+      "team": "Visitante"
+    },
+    {
+      "time": "01:36",
+      "team": "Visitante"
+    },
+    {
+      "time": "01:36",
+      "team": "Visitante"
+    },
+    {
+      "time": "01:27",
+      "team": "Visitante"
+    },
+    {
+      "time": "00:49",
+      "team": "Visitante"
+    },
+    {
+      "time": "00:44",
+      "team": "Visitante"
+    },
+    {
+      "time": "00:35",
+      "team": "Visitante"
+    },
+    {
+      "time": "00:07",
+      "team": "Visitante"
+    }
+  ]
+}

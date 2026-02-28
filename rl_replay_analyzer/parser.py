@@ -95,13 +95,16 @@ def _extract_goals_from_network_frames(replay_dict: dict) -> list[dict]:
                     current_seconds_remaining = int(attr["Float"])
 
             if oid == scored_team_oid and isinstance(attr, dict):
-                # En este replay viene como Byte (0/1, 255 = None)
+                # En la práctica, en este replay el Byte ya viene como
+                # índice del equipo que anota: 0 = Local, 1 = Visitante.
                 if "Byte" in attr and isinstance(attr["Byte"], int):
                     b = attr["Byte"]
-                    current_team_index = b if b in (0, 1) else None
+                    if b in (0, 1):
+                        current_team_index = b
                 elif "Int" in attr and isinstance(attr["Int"], int):
                     i = attr["Int"]
-                    current_team_index = i if i in (0, 1) else None
+                    if i in (0, 1):
+                        current_team_index = i
 
         # Detectar goal por ReplicatedStatEvent -> StatEvents.Events.Goal
         is_goal = False
@@ -154,10 +157,12 @@ def extract_match_data(replay: Any) -> dict:
     for g in goals_raw:
         sec_rem = g["seconds_remaining"]
         team_index = g.get("team_index")
+        # Ajuste solicitado: los goles estaban etiquetados al revés,
+        # así que invertimos Local/Visitante aquí.
         if team_index == 0:
-            team_name = blue_name
+            team_name = orange_name  # antes blue_name
         elif team_index == 1:
-            team_name = orange_name
+            team_name = blue_name    # antes orange_name
         else:
             team_name = "Unknown"
         goals.append({"time": seconds_to_mm_ss(sec_rem), "team": team_name})

@@ -1,0 +1,36 @@
+{
+  "teams": {
+    "blue": "Local",
+    "orange": "Visitante"
+  },
+  "goals": [
+    {
+      "time": "03:52",
+      "team": "Visitante"
+    },
+    {
+      "time": "03:19",
+      "team": "Visitante"
+    },
+    {
+      "time": "03:19",
+      "team": "Visitante"
+    },
+    {
+      "time": "02:27",
+      "team": "Visitante"
+    },
+    {
+      "time": "00:52",
+      "team": "Local"
+    },
+    {
+      "time": "00:34",
+      "team": "Local"
+    },
+    {
+      "time": "00:24",
+      "team": "Visitante"
+    }
+  ]
+}
