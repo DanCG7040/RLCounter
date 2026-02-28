@@ -1,0 +1,5 @@
+# Parser de replays de Rocket League
+# Sin dependencias obligatorias: el proyecto incluye un parser en Python puro
+# que lee el header del .replay (equipos y goles). Opcionalmente, si tienes
+# Rust instalado, puedes usar boxcars-py para soporte completo (tick_marks, etc.):
+#   pip install boxcars-py

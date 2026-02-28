@@ -1,0 +1,12 @@
+{
+  "teams": {
+    "blue": "Local",
+    "orange": "Visitante"
+  },
+  "goals": [
+    { "time": "04:23", "team": "Local" },
+    { "time": "03:11", "team": "Visitante" },
+    { "time": "02:11", "team": "Visitante" },
+    { "time": "01:05", "team": "Local" }
+  ]
+}
