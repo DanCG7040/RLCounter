@@ -1,5 +1,11 @@
-# Parser de replays de Rocket League
-# Sin dependencias obligatorias: el proyecto incluye un parser en Python puro
-# que lee el header del .replay (equipos y goles). Opcionalmente, si tienes
-# Rust instalado, puedes usar boxcars-py para soporte completo (tick_marks, etc.):
-#   pip install boxcars-py
+# Analizador de replays de Rocket League
+# Python 3.11 (64-bit). Entorno virtual recomendado.
+#
+# Crear venv:  py -3.11 -m venv .venv
+# Activar:     .venv\Scripts\Activate.ps1  (PowerShell)
+# Instalar:    pip install -r requirements.txt
+#
+# boxcars-py requiere Rust (rustup default stable) y en Windows
+# "Build Tools para Visual Studio" (MSVC). Ver SETUP_WINDOWS.md.
+
+sprocket-boxcars-py>=0.3.26

@@ -1,20 +1,22 @@
 @echo off
-cd /d "%~dp0"
 setlocal enabledelayedexpansion
+cd /d "%~dp0"
 
-REM Uso:
-REM - Doble clic: te pide la ruta del .replay
-REM - Arrastrar y soltar: usa el archivo soltado como %1
+REM Selector grafico de archivo (.replay) y analisis a JSON
 
-set "REPLAY=%~1"
-if "%REPLAY%"=="" (
-  echo.
-  echo Escribe o pega la ruta completa del archivo .replay y pulsa Enter:
-  set /p "REPLAY=> "
+REM Abrir cuadro de dialogo para elegir el replay
+for /f "usebackq delims=" %%F in (`powershell -NoProfile -Command ^
+  "Add-Type -AssemblyName System.Windows.Forms; ^
+   $dlg = New-Object System.Windows.Forms.OpenFileDialog; ^
+   $dlg.Filter = 'Replays (*.replay)|*.replay|Todos los archivos (*.*)|*.*'; ^
+   $dlg.Title = 'Selecciona un replay de Rocket League'; ^
+   $dlg.InitialDirectory = (Get-Location).Path; ^
+   if ($dlg.ShowDialog() -eq 'OK') { Write-Output $dlg.FileName }"`) do (
+  set "REPLAY=%%F"
 )
 
 if "%REPLAY%"=="" (
-  echo No se especifico ningun replay.
+  echo No se selecciono ningun archivo.
   pause
   exit /b 1
 )
@@ -49,3 +51,4 @@ echo.
 echo OK. JSON generado en:
 echo "%OUT%"
 pause
+

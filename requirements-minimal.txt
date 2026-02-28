@@ -1,0 +1,5 @@
+# Sin boxcars-py: solo lo necesario para ejecutar el analizador.
+# Usa el parser en Python puro (header). Tiempos aproximados.
+# pip install -r requirements-minimal.txt
+
+# (No hay dependencias obligatorias; el proyecto es autocontenido)

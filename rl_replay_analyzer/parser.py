@@ -1,193 +1,139 @@
 """
 Parser de archivos .replay de Rocket League.
 
-Extrae nombres de equipos (azul/naranja) y lista de goles con tiempo y equipo
-desde la metadata del replay (header) y, si hace falta, tick marks.
+Extrae equipos (blue/orange) y lista de goles con tiempo EXACTO del marcador
+y equipo que anotó, usando ÚNICAMENTE el stream de red (network_frames).
+NO se usa header["Goals"], Frame, ni conversión frame→segundos ni tick_rate.
 """
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
-from rl_replay_analyzer.exceptions import (
-    InvalidReplayError,
-    CorruptReplayError,
-    MissingDataError,
-)
-from rl_replay_analyzer.utils import (
-    get_prop,
-    first_string_from_header_prop,
-    keyframes_to_time_mapper,
-    seconds_to_mm_ss,
-)
+from rl_replay_analyzer.utils import seconds_to_mm_ss
 
 
 def _replay_to_dict(replay: Any) -> dict:
     """Convierte el objeto replay (boxcars) a dict para acceso uniforme."""
     if replay is None:
-        raise CorruptReplayError("Replay es None")
+        raise ValueError("El replay es None")
     if isinstance(replay, dict):
         return replay
-    # Objeto con atributos (p. ej. desde pyo3/boxcars)
-    if hasattr(replay, "__dict__"):
-        return vars(replay)
-    if hasattr(replay, "get"):
-        return dict(replay)
-    # Atributos conocidos de boxcars Replay
-    known = ("properties", "tick_marks", "keyframes", "levels", "game_type")
     out = {}
-    for name in known:
+    for name in ("properties", "network_frames", "objects", "names"):
         if hasattr(replay, name):
             val = getattr(replay, name)
-            if hasattr(val, "__iter__") and not isinstance(val, (str, bytes)):
+            # network_frames es un objeto con .frames, no convertirlo a lista
+            if name == "network_frames":
+                out[name] = val
+            elif hasattr(val, "__iter__") and not isinstance(val, (str, bytes)):
                 try:
                     out[name] = list(val) if val is not None else []
                 except Exception:
                     out[name] = val
             else:
                 out[name] = val
-    if out:
-        return out
-    try:
-        return json.loads(json.dumps(replay, default=lambda x: getattr(x, "__dict__", str(x))))
-    except Exception as e:
-        raise CorruptReplayError(f"No se pudo normalizar el replay: {e}") from e
+    return out
 
 
-def _get_team_names(replay_dict: dict) -> tuple[str, str]:
+def _extract_goals_from_network_frames(replay_dict: dict) -> list[dict]:
     """
-    Extrae nombres del equipo azul y naranja desde la propiedad TeamNames del header.
+    Extrae goles recorriendo `replay.network_frames` y leyendo el stream de red.
 
-    En partidas privadas, TeamNames es un ArrayProperty con dos elementos
-    (blue, orange); cada uno puede ser un string o una estructura con Str/Name.
+    Forma robusta (comprobada en este replay):
+    - El tiempo REAL del marcador está en actualizaciones de
+      `TAGame.GameEvent_Soccar_TA:SecondsRemaining` (attribute `Int`).
+    - El gol se detecta cuando `TAGame.GameEvent_Soccar_TA:ReplicatedStatEvent`
+      publica `StatEvents.Events.Goal`.
+    - El equipo que anota se obtiene del atributo `Byte` de
+      `TAGame.GameEvent_Soccar_TA:ReplicatedScoredOnTeam` (0/1).
+
+    Returns:
+        Lista de dicts {"seconds_remaining": int, "team_index": int | None},
+        en orden cronológico del partido (primer gol primero).
     """
-    team_names_prop = get_prop(replay_dict, "TeamNames")
-    blue_name: str | None = None
-    orange_name: str | None = None
+    objects = replay_dict.get("objects") or replay_dict.get("names") or []
 
-    # Formato boxcars: puede ser lista de listas de [key, value] o dict con "Array"
-    array_data: list | None = None
-    if isinstance(team_names_prop, list):
-        array_data = team_names_prop
-    elif isinstance(team_names_prop, dict) and "Array" in team_names_prop:
-        array_data = team_names_prop["Array"]
-
-    if array_data and len(array_data) >= 2:
-        blue_name = first_string_from_header_prop(array_data[0])
-        orange_name = first_string_from_header_prop(array_data[1])
-
-    # Si no hay nombres custom (partida pública), usar Local / Visitante
-    if not blue_name:
-        blue_name = "Local"
-    if not orange_name:
-        orange_name = "Visitante"
-
-    return blue_name, orange_name
-
-
-def _parse_goals_from_property(replay_dict: dict, blue_name: str, orange_name: str) -> list[dict]:
-    """
-    Extrae goles desde la propiedad Goals del header (cada elemento con Frame y Team).
-    """
-    goals_prop = get_prop(replay_dict, "Goals")
-    if goals_prop is None:
+    nf = replay_dict.get("network_frames")
+    if nf is None:
+        return []
+    frames = getattr(nf, "frames", None) or (nf.get("frames") if isinstance(nf, dict) else None)
+    if not frames:
         return []
 
-    # Goals puede ser Array de estructuras con "Frame" y "Team" (índice 0/1)
-    array_data: list | None = None
-    if isinstance(goals_prop, list):
-        array_data = goals_prop
-    elif isinstance(goals_prop, dict) and "Array" in goals_prop:
-        array_data = goals_prop["Array"]
+    def _obj_index(name: str) -> int | None:
+        try:
+            return objects.index(name)
+        except ValueError:
+            return None
 
-    if not array_data:
+    seconds_oid = _obj_index("TAGame.GameEvent_Soccar_TA:SecondsRemaining")
+    stat_oid = _obj_index("TAGame.GameEvent_Soccar_TA:ReplicatedStatEvent")
+    scored_team_oid = _obj_index("TAGame.GameEvent_Soccar_TA:ReplicatedScoredOnTeam")
+    goal_event_oid = _obj_index("StatEvents.Events.Goal")
+
+    if seconds_oid is None or stat_oid is None or goal_event_oid is None:
         return []
 
-    keyframes = replay_dict.get("keyframes") or []
-    frame_to_time = keyframes_to_time_mapper(keyframes)
-
+    current_seconds_remaining: int | None = None
+    current_team_index: int | None = None
     goals: list[dict] = []
-    for entry in array_data:
-        frame_val = None
-        team_idx = None
-        # Cada entry puede ser lista de [key, value] o dict
-        if isinstance(entry, list):
-            for pair in entry:
-                if not isinstance(pair, (list, tuple)) or len(pair) < 2:
-                    continue
-                k, v = pair[0], pair[1]
-                if isinstance(k, str):
-                    k = k.strip().rstrip("\x00")
-                if k in ("Frame", "frame"):
-                    frame_val = v if isinstance(v, int) else (v.get("Int") if isinstance(v, dict) else None)
-                elif k in ("Team", "TeamIndex", "team", "PlayerTeam", "playerteam"):
-                    if isinstance(v, int):
-                        team_idx = v
-                    elif isinstance(v, dict) and "Int" in v:
-                        team_idx = v["Int"]
-        elif isinstance(entry, dict):
-            frame_val = entry.get("Frame") or entry.get("frame")
-            team_idx = entry.get("Team") or entry.get("TeamIndex") or entry.get("team")
-            if isinstance(frame_val, dict):
-                frame_val = frame_val.get("Int")
-            if isinstance(team_idx, dict):
-                team_idx = team_idx.get("Int")
 
-        if frame_val is None:
-            continue
-        frame = int(frame_val) if not isinstance(frame_val, int) else frame_val
-        if team_idx == 0:
-            team_name = blue_name
-        elif team_idx == 1:
-            team_name = orange_name
-        else:
-            team_name = "Unknown"
-        time_str = seconds_to_mm_ss(frame_to_time(frame))
-        goals.append({"time": time_str, "team": team_name})
+    for frame in frames:
+        updated = frame.get("updated_actors", []) if isinstance(frame, dict) else []
 
+        for ua in updated:
+            oid = ua.get("object_id")
+            attr = ua.get("attribute")
+
+            if oid == seconds_oid and isinstance(attr, dict):
+                # SecondsRemaining suele venir como Int
+                if "Int" in attr and isinstance(attr["Int"], int):
+                    current_seconds_remaining = attr["Int"]
+                elif "Float" in attr and isinstance(attr["Float"], (int, float)):
+                    current_seconds_remaining = int(attr["Float"])
+
+            if oid == scored_team_oid and isinstance(attr, dict):
+                # En este replay viene como Byte (0/1, 255 = None)
+                if "Byte" in attr and isinstance(attr["Byte"], int):
+                    b = attr["Byte"]
+                    current_team_index = b if b in (0, 1) else None
+                elif "Int" in attr and isinstance(attr["Int"], int):
+                    i = attr["Int"]
+                    current_team_index = i if i in (0, 1) else None
+
+        # Detectar goal por ReplicatedStatEvent -> StatEvents.Events.Goal
+        is_goal = False
+        for ua in updated:
+            if ua.get("object_id") != stat_oid:
+                continue
+            attr = ua.get("attribute")
+            if not isinstance(attr, dict):
+                continue
+            se = attr.get("StatEvent")
+            if isinstance(se, dict) and se.get("object_id") == goal_event_oid:
+                is_goal = True
+                break
+
+        if is_goal and current_seconds_remaining is not None:
+            goals.append(
+                {
+                    "seconds_remaining": current_seconds_remaining,
+                    "team_index": current_team_index,
+                }
+            )
+
+    goals.sort(key=lambda g: g["seconds_remaining"], reverse=True)
     return goals
 
 
-def _parse_goals_from_tick_marks(
-    replay_dict: dict, blue_name: str, orange_name: str
-) -> list[dict]:
+def extract_match_data(replay: Any) -> dict:
     """
-    Fallback: extrae goles desde tick_marks (description "Goal").
-    No tenemos equipo en tick marks, se asigna "Unknown" o se omite equipo.
-    """
-    tick_marks = replay_dict.get("tick_marks") or []
-    if not tick_marks:
-        return []
+    Extrae equipos y goles desde un replay ya parseado (boxcars_py).
 
-    keyframes = replay_dict.get("keyframes") or []
-    frame_to_time = keyframes_to_time_mapper(keyframes)
-
-    goals = []
-    for tm in tick_marks:
-        if isinstance(tm, dict):
-            desc = (tm.get("description") or "").strip().lower()
-            frame_val = tm.get("frame")
-        elif isinstance(tm, (list, tuple)) and len(tm) >= 2:
-            desc = (str(tm[1].get("description", tm[1]) if isinstance(tm[1], dict) else tm[1]) or "").strip().lower()
-            frame_val = tm[0] if isinstance(tm[0], int) else (tm[1].get("frame") if isinstance(tm[1], dict) else None)
-        else:
-            continue
-        if "goal" not in desc:
-            continue
-        if frame_val is None:
-            continue
-        frame = int(frame_val)
-        time_str = seconds_to_mm_ss(frame_to_time(frame))
-        goals.append({"time": time_str, "team": "Unknown"})
-
-    return goals
-
-
-def extract_match_data(replay_dict: dict) -> dict:
-    """
-    Extrae equipos y goles ordenados cronológicamente desde un replay ya parseado (dict).
+    Los goles se obtienen ÚNICAMENTE del stream de red (network_frames),
+    evento TAGame.GameEvent_Soccar_TA:GoalScored y atributo SecondsRemaining.
 
     Returns:
         Dict con estructura:
@@ -196,28 +142,34 @@ def extract_match_data(replay_dict: dict) -> dict:
           "goals": [ { "time": "mm:ss", "team": str }, ... ]
         }
     """
-    replay_dict = _replay_to_dict(replay_dict)
-    blue_name, orange_name = _get_team_names(replay_dict)
+    replay_dict = _replay_to_dict(replay)
 
-    goals = _parse_goals_from_property(replay_dict, blue_name, orange_name)
-    if not goals:
-        goals = _parse_goals_from_tick_marks(replay_dict, blue_name, orange_name)
+    # Requisito del proyecto: blue/orange → Local/Visitante
+    blue_name = "Local"
+    orange_name = "Visitante"
 
-    # Orden cronológico por tiempo (mm:ss como string ordena bien si padding correcto)
-    goals.sort(key=lambda g: (g["time"], g["team"]))
+    goals_raw = _extract_goals_from_network_frames(replay_dict)
 
-    return {
-        "teams": {"blue": blue_name, "orange": orange_name},
-        "goals": goals,
-    }
+    goals: list[dict] = []
+    for g in goals_raw:
+        sec_rem = g["seconds_remaining"]
+        team_index = g.get("team_index")
+        if team_index == 0:
+            team_name = blue_name
+        elif team_index == 1:
+            team_name = orange_name
+        else:
+            team_name = "Unknown"
+        goals.append({"time": seconds_to_mm_ss(sec_rem), "team": team_name})
+
+    return {"teams": {"blue": blue_name, "orange": orange_name}, "goals": goals}
 
 
 def parse_replay_file(path: str | Path) -> dict:
     """
-    Abre un archivo .replay, lo parsea y devuelve el resultado estructurado.
+    Abre un archivo .replay, lo parsea con boxcars_py y devuelve el resultado.
 
-    Usa boxcars_py si está instalado; si no (p. ej. en Windows sin Rust),
-    usa un parser en Python puro que solo lee el header.
+    Requiere boxcars_py instalado (y compilación con MSVC en Windows).
 
     Args:
         path: Ruta al archivo .replay.
@@ -226,42 +178,34 @@ def parse_replay_file(path: str | Path) -> dict:
         Dict con "teams" y "goals" listos para resultado.json.
 
     Raises:
-        InvalidReplayError: Archivo no encontrado o no válido.
-        CorruptReplayError: Replay corrupto o no parseable.
-        MissingDataError: Faltan datos necesarios en el replay.
+        FileNotFoundError: Archivo no encontrado.
+        ValueError: No es un .replay o fallo al parsear.
     """
     path = Path(path)
     if not path.exists():
-        raise InvalidReplayError(f"Archivo no encontrado: {path}")
+        raise FileNotFoundError(f"Archivo no encontrado: {path}")
     if path.suffix.lower() != ".replay":
-        raise InvalidReplayError(f"Extensión esperada .replay: {path}")
+        raise ValueError(f"Se esperaba extensión .replay: {path}")
 
-    try:
-        with open(path, "rb") as f:
-            data = f.read()
-    except OSError as e:
-        raise InvalidReplayError(f"No se pudo leer el archivo: {e}") from e
+    with open(path, "rb") as f:
+        data = f.read()
 
+    # Preferir el fork mantenido (sprocket) ya que soporta replays recientes.
     try:
-        from boxcars_py import parse_replay
+        from sprocket_boxcars_py import parse_replay
     except ImportError:
-        # Sin Rust/boxcars: usar parser en Python puro (solo header)
-        from rl_replay_analyzer.header_parser import parse_header
-
         try:
-            header_dict = parse_header(data)
-        except CorruptReplayError:
-            raise
-        except Exception as e:
-            raise CorruptReplayError(f"Error al parsear el header del replay: {e}") from e
-        return extract_match_data(header_dict)
+            from boxcars_py import parse_replay
+        except ImportError as e:
+            raise ImportError(
+                "Se requiere boxcars_py o sprocket_boxcars_py. "
+                "Recomendado: pip install sprocket-boxcars-py. "
+                "En Windows necesitas Visual Studio Build Tools (MSVC)."
+            ) from e
 
-    try:
-        replay = parse_replay(data)
-    except Exception as e:
-        raise CorruptReplayError(f"Error al parsear el replay: {e}") from e
+    replay = parse_replay(data)
 
     if replay is None:
-        raise CorruptReplayError("El parser devolvió None")
+        raise ValueError("El parser devolvió None")
 
     return extract_match_data(replay)
